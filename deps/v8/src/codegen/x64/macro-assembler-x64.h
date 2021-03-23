@@ -524,7 +524,15 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   Operand EntryFromBuiltinIndexAsOperand(Builtins::Name builtin_index);
   Operand EntryFromBuiltinIndexAsOperand(Register builtin_index);
   void CallBuiltinByIndex(Register builtin_index) override;
+  void CallBuiltin(Builtins::Name builtin) {
+    // TODO(11527): drop the int overload in favour of the Builtins::Name one.
+    return CallBuiltin(static_cast<int>(builtin));
+  }
   void CallBuiltin(int builtin_index);
+  void TailCallBuiltin(Builtins::Name builtin) {
+    // TODO(11527): drop the int overload in favour of the Builtins::Name one.
+    return TailCallBuiltin(static_cast<int>(builtin));
+  }
   void TailCallBuiltin(int builtin_index);
 
   void LoadCodeObjectEntry(Register destination, Register code_object) override;
@@ -614,8 +622,10 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   // Requires that dst == src1 if AVX is not supported.
   void I32x4ExtMul(XMMRegister dst, XMMRegister src1, XMMRegister src2,
                    bool low, bool is_signed);
-  void I16x8ExtMul(XMMRegister dst, XMMRegister src1, XMMRegister src2,
-                   bool low, bool is_signed);
+  void I16x8ExtMulLow(XMMRegister dst, XMMRegister src1, XMMRegister src2,
+                      bool is_signed);
+  void I16x8ExtMulHighS(XMMRegister dst, XMMRegister src1, XMMRegister src2);
+  void I16x8ExtMulHighU(XMMRegister dst, XMMRegister src1, XMMRegister src2);
 
   void I16x8Q15MulRSatS(XMMRegister dst, XMMRegister src1, XMMRegister src2);
 
@@ -635,7 +645,8 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void I16x8ExtAddPairwiseI8x16S(XMMRegister dst, XMMRegister src);
   void I32x4ExtAddPairwiseI16x8U(XMMRegister dst, XMMRegister src);
 
-  void I8x16Swizzle(XMMRegister dst, XMMRegister src, XMMRegister mask);
+  void I8x16Swizzle(XMMRegister dst, XMMRegister src, XMMRegister mask,
+                    bool omit_add = false);
 
   void Abspd(XMMRegister dst);
   void Negpd(XMMRegister dst);
@@ -704,6 +715,9 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void InitializeRootRegister() {
     ExternalReference isolate_root = ExternalReference::isolate_root(isolate());
     Move(kRootRegister, isolate_root);
+#ifdef V8_COMPRESS_POINTERS_IN_SHARED_CAGE
+    Move(kPointerCageBaseRegister, isolate_root);
+#endif
   }
 
   void SaveRegisters(RegList registers);
@@ -1091,11 +1105,11 @@ class V8_EXPORT_PRIVATE MacroAssembler : public TurboAssembler {
 
   // Load the global proxy from the current context.
   void LoadGlobalProxy(Register dst) {
-    LoadNativeContextSlot(Context::GLOBAL_PROXY_INDEX, dst);
+    LoadNativeContextSlot(dst, Context::GLOBAL_PROXY_INDEX);
   }
 
   // Load the native context slot with the current index.
-  void LoadNativeContextSlot(int index, Register dst);
+  void LoadNativeContextSlot(Register dst, int index);
 
   // ---------------------------------------------------------------------------
   // Runtime calls
@@ -1140,40 +1154,20 @@ class V8_EXPORT_PRIVATE MacroAssembler : public TurboAssembler {
   // In-place weak references.
   void LoadWeakValue(Register in_out, Label* target_if_cleared);
 
-  // ---------------------------------------------------------------------------
-  // Debugging
-
-  static int SafepointRegisterStackIndex(Register reg) {
-    return SafepointRegisterStackIndex(reg.code());
-  }
-
  private:
-  // Order general registers are pushed by Pushad.
-  // rax, rcx, rdx, rbx, rsi, rdi, r8, r9, r11, r12, r14, r15.
-  static const int kSafepointPushRegisterIndices[Register::kNumRegisters];
-  static const int kNumSafepointSavedRegisters = 12;
-
   // Helper functions for generating invokes.
   void InvokePrologue(Register expected_parameter_count,
                       Register actual_parameter_count, Label* done,
                       InvokeFlag flag);
 
-  void EnterExitFramePrologue(bool save_rax, StackFrame::Type frame_type);
+  void EnterExitFramePrologue(Register saved_rax_reg,
+                              StackFrame::Type frame_type);
 
   // Allocates arg_stack_space * kSystemPointerSize memory (not GCed) on the
   // stack accessible via StackSpaceOperand.
   void EnterExitFrameEpilogue(int arg_stack_space, bool save_doubles);
 
   void LeaveExitFrameEpilogue();
-
-  // Compute memory operands for safepoint stack slots.
-  static int SafepointRegisterStackIndex(int reg_code) {
-    return kNumSafepointRegisters - kSafepointPushRegisterIndices[reg_code] - 1;
-  }
-
-  // Needs access to SafepointRegisterStackIndex for compiled frame
-  // traversal.
-  friend class CommonFrame;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(MacroAssembler);
 };

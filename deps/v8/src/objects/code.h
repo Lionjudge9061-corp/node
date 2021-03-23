@@ -13,6 +13,7 @@
 #include "src/objects/fixed-array.h"
 #include "src/objects/heap-object.h"
 #include "src/objects/objects.h"
+#include "src/objects/shared-function-info.h"
 #include "src/objects/struct.h"
 
 // Has to be the last include (doesn't have include guards):
@@ -149,6 +150,27 @@ class Code : public HeapObject {
   inline Address InstructionEnd() const;
   V8_EXPORT_PRIVATE Address OffHeapInstructionEnd() const;
 
+  // When builtins un-embedding (FLAG_short_builtin_calls) is enabled both
+  // embedded and un-embedded builtins might be exeuted and thus two kinds of
+  // |pc|s might appear on the stack.
+  // Unlike the paremeterless versions of the functions above the below variants
+  // ensure that the instruction start correspond to the given |pc| value.
+  // Thus for off-heap trampoline Code objects the result might be the
+  // instruction start/end of the embedded code stream or of un-embedded one.
+  // For normal Code objects these functions just return the
+  // raw_instruction_start/end() values.
+  // TODO(11527): remove these versions once the full solution is ready.
+  inline Address InstructionStart(Isolate* isolate, Address pc) const;
+  V8_EXPORT_PRIVATE Address OffHeapInstructionStart(Isolate* isolate,
+                                                    Address pc) const;
+  inline Address InstructionEnd(Isolate* isolate, Address pc) const;
+  V8_EXPORT_PRIVATE Address OffHeapInstructionEnd(Isolate* isolate,
+                                                  Address pc) const;
+
+  // Computes offset of the |pc| from the instruction start. The |pc| must
+  // belong to this code.
+  inline int GetOffsetFromInstructionStart(Isolate* isolate, Address pc) const;
+
   inline int raw_instruction_size() const;
   inline void set_raw_instruction_size(int value);
   inline int InstructionSize() const;
@@ -220,12 +242,16 @@ class Code : public HeapObject {
   // [deoptimization_data]: Array containing data for deopt.
   DECL_ACCESSORS(deoptimization_data, FixedArray)
 
-  // [source_position_table]: ByteArray for the source positions table.
-  DECL_ACCESSORS(source_position_table, Object)
+  // [source_position_table]: ByteArray for the source positions table for
+  // non-baseline code.
+  DECL_ACCESSORS(source_position_table, ByteArray)
+  // [bytecode_offset_table]: ByteArray for the bytecode offset for baseline
+  // code.
+  DECL_ACCESSORS(bytecode_offset_table, ByteArray)
 
   // If source positions have not been collected or an exception has been thrown
   // this will return empty_byte_array.
-  inline ByteArray SourcePositionTable() const;
+  inline ByteArray SourcePositionTable(SharedFunctionInfo sfi) const;
 
   // [code_data_container]: A container indirection for all mutable fields.
   DECL_RELEASE_ACQUIRE_ACCESSORS(code_data_container, CodeDataContainer)
@@ -326,7 +352,7 @@ class Code : public HeapObject {
   inline bool is_off_heap_trampoline() const;
 
   // Get the safepoint entry for the given pc.
-  SafepointEntry GetSafepointEntry(Address pc);
+  SafepointEntry GetSafepointEntry(Isolate* isolate, Address pc);
 
   // The entire code object including its header is copied verbatim to the
   // snapshot so that it can be written in one, fast, memcpy during
@@ -365,7 +391,7 @@ class Code : public HeapObject {
   inline Address entry() const;
 
   // Returns true if pc is inside this object's instructions.
-  inline bool contains(Address pc);
+  inline bool contains(Isolate* isolate, Address pc);
 
   // Relocate the code by delta bytes. Called to signal that this code
   // object has been moved by delta bytes.
@@ -380,8 +406,9 @@ class Code : public HeapObject {
                                               const CodeDesc& desc);
 
   inline uintptr_t GetBaselinePCForBytecodeOffset(int bytecode_offset,
-                                                  bool precise = true);
-  inline int GetBytecodeOffsetForBaselinePC(Address baseline_pc);
+                                                  BytecodeArray bytecodes);
+  inline int GetBytecodeOffsetForBaselinePC(Address baseline_pc,
+                                            BytecodeArray bytecodes);
 
   // Flushes the instruction cache for the executable instructions of this code
   // object. Make sure to call this while the code is still writable.
@@ -400,7 +427,7 @@ class Code : public HeapObject {
   DECL_PRINTER(Code)
   DECL_VERIFIER(Code)
 
-  bool CanDeoptAt(Address pc);
+  bool CanDeoptAt(Isolate* isolate, Address pc);
 
   void SetMarkedForDeoptimization(const char* reason);
 
@@ -428,7 +455,7 @@ class Code : public HeapObject {
 #define CODE_FIELDS(V)                                                        \
   V(kRelocationInfoOffset, kTaggedSize)                                       \
   V(kDeoptimizationDataOffset, kTaggedSize)                                   \
-  V(kSourcePositionTableOffset, kTaggedSize)                                  \
+  V(kPositionTableOffset, kTaggedSize)                                        \
   V(kCodeDataContainerOffset, kTaggedSize)                                    \
   /* Data or code not directly visited by GC directly starts here. */         \
   /* The serializer needs to copy bytes starting from here verbatim. */       \
@@ -577,8 +604,8 @@ class AbstractCode : public HeapObject {
   // at instruction_start.
   inline int InstructionSize();
 
-  // Return the source position table.
-  inline ByteArray source_position_table();
+  // Return the source position table for interpreter code.
+  inline ByteArray SourcePositionTable(SharedFunctionInfo sfi);
 
   void DropStackFrameCache();
 
@@ -600,6 +627,9 @@ class AbstractCode : public HeapObject {
   static const int kMaxLoopNestingMarker = 6;
 
   OBJECT_CONSTRUCTORS(AbstractCode, HeapObject);
+
+ private:
+  inline ByteArray SourcePositionTableInternal();
 };
 
 // Dependent code is a singly linked list of weak fixed arrays. Each array
